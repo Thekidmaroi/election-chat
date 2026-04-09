@@ -10,6 +10,7 @@ import pdfplumber
 import pandas as pd
 import duckdb
 from unidecode import unidecode
+from rapidfuzz import process, fuzz
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -18,6 +19,16 @@ PDF_URL  = os.getenv("PDF_URL", "https://www.cei.ci/wp-content/uploads/2025/12/E
 PDF_PATH = "data/election_2025.pdf"
 DB_PATH  = "data/election.duckdb"
 
+KNOWN_REGIONS = [
+    "AGNEBY-TIASSA", "BAFING", "BAGOUE", "BELIER", "BERE", "BOUNKANI",
+    "CAVALLY", "DISTRICT AUTONOME D ABIDJAN", "DISTRICT AUTONOME DE YAMOUSSOUKRO",
+    "FOLON", "GBEKE", "GBOKLE", "GOH", "GONTOUGO", "GRANDS PONTS",
+    "GUEMON", "HAMBOL", "HAUT-SASSANDRA", "IFFOU", "INDENIE-DJUABLIN",
+    "KABADOUGOU", "LA ME", "LOH-DJIBOUA", "MARAHOUE", "ME", "MORONOU",
+    "NAWA", "N ZI", "PORO", "SAN-PEDRO", "SUD-COMOE", "TCHOLOGO",
+    "TONKPI", "WORODOUGOU", "ZANZAN"
+]
+
 KNOWN_PARTIS = [
     "PDCI - FPI - ADCI", "PDCI-RDA", "INDEPENDANT", "RHDP", "FPI", "ADCI",
     "MGC", "CODE", "GP-PAIX", "UDCY", "CNJB-ADO", "GJPA-CI", "CNPCIN",
@@ -25,6 +36,7 @@ KNOWN_PARTIS = [
     "MLPCI", "MNRP", "P.B.J.V", "PIA/PRI/CODE", "PPSD", "PRO CI",
     "REEL.CI", "UNCI", "UFD", "UNPR", "LE BUFFLE", "CNDCI", "ICON"
 ]
+
 
 def download_pdf():
     if os.path.exists(PDF_PATH) and os.path.getsize(PDF_PATH) > 10000:
@@ -38,13 +50,16 @@ def download_pdf():
         f.write(r.content)
     print(f"PDF downloaded ({os.path.getsize(PDF_PATH)//1024} KB)")
 
+
 def norm(text):
     if not isinstance(text, str):
         return ""
     return re.sub(r"\s+", " ", text.strip())
 
+
 def norm_upper(text):
     return unidecode(norm(text)).upper()
+
 
 def to_int(val):
     if val is None:
@@ -54,6 +69,7 @@ def to_int(val):
     except:
         return None
 
+
 def to_float(val):
     if val is None:
         return None
@@ -62,6 +78,55 @@ def to_float(val):
     except:
         return None
 
+
+def match_region(text, threshold=60):
+    t = unidecode(text.upper().strip())
+    if len(t) < 3:
+        return None
+    result = process.extractOne(t, KNOWN_REGIONS, scorer=fuzz.token_sort_ratio)
+    if result and result[1] >= threshold:
+        return result[0]
+    return None
+
+
+# ─────────────────────────────────────────
+# Pre-pass: build circ_num -> region map
+# ─────────────────────────────────────────
+def build_region_map():
+    print("Building region map from spatial extraction...")
+    region_map = {}
+    last_matched_region = ""
+
+    with pdfplumber.open(PDF_PATH) as pdf:
+        for page in pdf.pages:
+            words = page.extract_words()
+            region_col = [w for w in words
+                          if w['x0'] < 45 and w['x1'] < 80
+                          and w['text'] not in ['REGI', 'ON']]
+            region_col = sorted(region_col, key=lambda x: x['top'])
+
+            current_letters = []
+            for w in region_col:
+                text = w['text'].strip()
+                if text.isdigit() and len(text) == 3:
+                    if current_letters:
+                        joined = "".join(reversed(current_letters))
+                        matched = match_region(joined)
+                        if matched:
+                            last_matched_region = matched
+                        current_letters = []
+                    if last_matched_region:
+                        region_map[text] = last_matched_region
+                else:
+                    current_letters.append(text)
+
+    print(f"Region map built: {len(region_map)} circumscriptions mapped")
+    return region_map
+
+
+# ─────────────────────────────────────────
+# Extract text pages
+# ─────────────────────────────────────────
 def extract_text_pages():
     pages = []
     with pdfplumber.open(PDF_PATH) as pdf:
@@ -72,9 +137,11 @@ def extract_text_pages():
     print(f"Extracted text from {len(pages)} pages")
     return pages
 
+
 def is_candidate_line(line):
     up = line.upper()
     return any(up.startswith(p) for p in KNOWN_PARTIS)
+
 
 def parse_candidate_line(line):
     parti = ""
@@ -105,6 +172,7 @@ def parse_candidate_line(line):
         "elu":         elu,
     }
 
+
 def parse_circ_line(line):
     m = re.match(
         r"^(\d{3})\s+(.+?)\s+([\d][\d\s]{1,5})\s+([\d][\d\s]{2,8})\s+([\d][\d\s]{2,8})\s+([\d,\.]+)\s*%\s+([\d][\d\s]{0,8})\s+([\d][\d\s]{2,8})\s+([\d]+)\s+([\d,\.]+)\s*%?",
@@ -122,17 +190,6 @@ def parse_circ_line(line):
         }
     return None
 
-REGIONS = [
-    "AGNEBY", "BAFING", "BAGOUE", "BELIER", "BERE", "BOUNKANI", "CAVALLY",
-    "DISTRICT", "FOLON", "GBEKE", "GBOKLE", "GOH", "GONTOUGO", "GRANDS PONTS",
-    "GUEMON", "HAMBOL", "HAUT", "IFFOU", "INDENIE", "KABADOUGOU", "LA ME",
-    "LOH", "MARAHOUE", "MORONOU", "NAWA", "N ZI", "PORO", "SAN",
-    "SASSANDRA", "SUD", "TCHOLOGO", "TONKPI", "WORODOUGOU", "ZANZAN"
-]
-
-def is_region(line):
-    up = norm_upper(line)
-    return any(up == r or up.startswith(r + " ") or up.startswith(r + "-") for r in REGIONS)
 
 SKIP = [
     "ELECTION DES DEPUTES", "SCRUTIN DU", "RESULTATS DES SCRUTINS",
@@ -141,15 +198,16 @@ SKIP = [
     "ON PART.", "TOTAL 25"
 ]
 
+
 def is_skip(line):
     up = line.upper()
     if re.match(r"^Page \d+ de \d+", line, re.IGNORECASE):
         return True
     return any(kw in up for kw in SKIP)
 
-def parse_pages(pages):
+
+def parse_pages(pages, region_map):
     records = []
-    current_region    = ""
     current_circ_num  = ""
     current_circ_name = ""
     current_inscrits  = None
@@ -165,9 +223,7 @@ def parse_pages(pages):
                 continue
             if is_skip(line):
                 continue
-            if is_region(line):
-                current_region = norm_upper(line)
-                continue
+
             circ = parse_circ_line(line)
             if circ:
                 current_circ_num  = circ["circ_num"]
@@ -178,12 +234,14 @@ def parse_pages(pages):
                 current_blancs    = circ["blancs_nuls"]
                 current_exprimes  = circ["exprimes"]
                 continue
+
             if is_candidate_line(line):
                 cand = parse_candidate_line(line)
                 if cand:
+                    region = region_map.get(current_circ_num, "")
                     records.append({
                         "source_page":        page_num,
-                        "region":             current_region,
+                        "region":             region,
                         "circ_num":           current_circ_num,
                         "circonscription":    current_circ_name,
                         "inscrits":           current_inscrits,
@@ -200,6 +258,7 @@ def parse_pages(pages):
 
     print(f"Parsed {len(records)} candidate records")
     return records
+
 
 def load_to_duckdb(df):
     if df.empty:
@@ -259,29 +318,27 @@ def load_to_duckdb(df):
     regions = con.execute("SELECT COUNT(DISTINCT region) FROM results WHERE region != ''").fetchone()[0]
     circs   = con.execute("SELECT COUNT(DISTINCT circ_num) FROM results WHERE circ_num != ''").fetchone()[0]
     partis  = con.execute("SELECT COUNT(DISTINCT parti) FROM results").fetchone()[0]
-    print(f"DuckDB loaded:")
-    print(f"  {count} candidate rows")
-    print(f"  {winners} elus")
-    print(f"  {regions} regions")
-    print(f"  {circs} circonscriptions")
-    print(f"  {partis} partis")
-    print("\nSample winners:")
-    print(con.execute("SELECT circ_num, circonscription, candidat, parti, voix FROM vw_winners LIMIT 5").df().to_string())
+    print(f"DuckDB loaded: {count} rows | {winners} elus | {regions} regions | {circs} circs | {partis} partis")
+
+    print("\nRegions detected:")
+    print(con.execute("SELECT region, COUNT(DISTINCT circ_num) as circs FROM results WHERE region != '' GROUP BY region ORDER BY region").df().to_string())
     con.close()
+
 
 def run():
     download_pdf()
+    region_map = build_region_map()
     pages = extract_text_pages()
-    records = parse_pages(pages)
+    records = parse_pages(pages, region_map)
     if not records:
         print("ERROR: No records parsed!")
         return
     df = pd.DataFrame(records)
-    print(df.head(3).to_string())
     df.to_csv("data/election_2025.csv", index=False)
     print("CSV saved")
     load_to_duckdb(df)
     print("\nIngestion complete!")
+
 
 if __name__ == "__main__":
     run()
