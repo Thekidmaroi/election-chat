@@ -48,6 +48,7 @@ EXEMPLES DE REQUETES CORRECTES:
 - "top candidats" → SELECT candidat, SUM(voix) as total_voix FROM results WHERE LENGTH(candidat) < 35 AND candidat NOT ILIKE '%ENSEMBLE%' AND candidat NOT ILIKE '%POUR%' AND candidat NOT ILIKE '%IVOIRE%' GROUP BY candidat ORDER BY total_voix DESC LIMIT 10
 - "qui a gagne dans 001" → SELECT candidat, parti, voix, pourcentage FROM vw_winners WHERE circ_num = '001'
 - "participation la plus basse" → SELECT circonscription, taux_participation FROM vw_turnout ORDER BY taux_participation ASC LIMIT 5
+- "circonscription avec le plus de voix" → SELECT circonscription, circ_num, SUM(voix) as total_voix FROM results GROUP BY circonscription, circ_num ORDER BY total_voix DESC LIMIT 5
 - "region Gbeke" → WHERE region ILIKE '%GBEKE%'
 - "region Haut-Sassandra" → WHERE region ILIKE '%HAUT%SASSANDRA%'
 
@@ -61,6 +62,7 @@ REGLES STRICTES:
 7. Si hors dataset: intent = out_of_scope
 8. JSON valide uniquement, sans markdown, sans backticks
 9. Pour toute question sur un parti seul (RHDP, PDCI, FPI...) → compter les sieges dans vw_winners
+10. Toujours inclure le nom complet de la circonscription dans les SELECT
 
 REGLE chart_type:
 - "none" par defaut
@@ -85,7 +87,6 @@ def wants_chart(question: str) -> bool:
 
 
 def normalize_question(question: str) -> str:
-    """Remove accents for better SQL matching."""
     return unidecode(question)
 
 
@@ -173,9 +174,7 @@ def process_question(question: str) -> dict:
                 "error": "blocked"
             }
 
-    # Normalize accents before sending to LLM
     question_normalized = normalize_question(question)
-
     llm_response = ask_llm(question_normalized)
     intent      = llm_response.get("intent", "error")
     sql         = llm_response.get("sql")
@@ -211,7 +210,6 @@ def process_question(question: str) -> dict:
             "error": error
         }
 
-    # Use original question for natural language answer
     answer = "Aucun résultat trouvé dans le dataset électoral." if (df is None or df.empty) else formulate_answer(question, df)
 
     return {
