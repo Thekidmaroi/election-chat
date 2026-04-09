@@ -7,6 +7,7 @@ import re
 import json
 import duckdb
 import pandas as pd
+from unidecode import unidecode
 from dotenv import load_dotenv
 from openai import OpenAI
 
@@ -41,23 +42,25 @@ SCHEMA:
 {SCHEMA}
 
 EXEMPLES DE REQUETES CORRECTES:
-- "RHDP combien" ou "combien RHDP" ou "RHDP sieges" ou "RHDP ?" → SELECT COUNT(*) as sieges_gagnes FROM vw_winners WHERE parti ILIKE '%RHDP%'
+- "RHDP combien" ou "combien RHDP" → SELECT COUNT(*) as sieges_gagnes FROM vw_winners WHERE parti ILIKE '%RHDP%'
 - "combien de sieges PDCI" → SELECT COUNT(*) as sieges_gagnes FROM vw_winners WHERE parti ILIKE '%PDCI%'
 - "combien independants elus" → SELECT COUNT(*) as sieges_gagnes FROM vw_winners WHERE parti ILIKE '%INDEPENDANT%'
 - "top candidats" → SELECT candidat, SUM(voix) as total_voix FROM results WHERE LENGTH(candidat) < 35 AND candidat NOT ILIKE '%ENSEMBLE%' AND candidat NOT ILIKE '%POUR%' AND candidat NOT ILIKE '%IVOIRE%' GROUP BY candidat ORDER BY total_voix DESC LIMIT 10
 - "qui a gagne dans 001" → SELECT candidat, parti, voix, pourcentage FROM vw_winners WHERE circ_num = '001'
 - "participation la plus basse" → SELECT circonscription, taux_participation FROM vw_turnout ORDER BY taux_participation ASC LIMIT 5
+- "region Gbeke" → WHERE region ILIKE '%GBEKE%'
+- "region Haut-Sassandra" → WHERE region ILIKE '%HAUT%SASSANDRA%'
 
 REGLES STRICTES:
 1. SELECT uniquement — jamais INSERT, UPDATE, DELETE, DROP, ALTER
 2. LIMIT 50 maximum sauf aggregation globale
 3. Utilise UNIQUEMENT les tables/vues du schema
-4. Pour les noms: utilise ILIKE pour la recherche floue
+4. Pour les noms avec accents ou variantes: utilise ILIKE avec wildcards. Les noms dans la DB sont sans accents en majuscules. Ex: Gbêkê → ILIKE '%GBEKE%', Côte d'Ivoire → ILIKE '%COTE%IVOIRE%'
 5. vw_winners ne contient PAS la colonne elu
 6. Pour le top candidats: WHERE LENGTH(candidat) < 35 AND candidat NOT ILIKE '%ENSEMBLE%' AND candidat NOT ILIKE '%POUR%' AND candidat NOT ILIKE '%IVOIRE%' AND candidat NOT ILIKE '%COTE%' AND candidat NOT ILIKE '%UNE%' AND candidat NOT ILIKE '%TOUS%'
 7. Si hors dataset: intent = out_of_scope
 8. JSON valide uniquement, sans markdown, sans backticks
-9. ATTENTION: Pour toute question sur un parti seul (RHDP, PDCI, FPI...) → compter les sieges dans vw_winners, JAMAIS les voix
+9. Pour toute question sur un parti seul (RHDP, PDCI, FPI...) → compter les sieges dans vw_winners
 
 REGLE chart_type:
 - "none" par defaut
@@ -79,6 +82,11 @@ CHART_KEYWORDS   = ["graphique", "graph", "barre", "visualise", "montre", "affic
 
 def wants_chart(question: str) -> bool:
     return any(kw in question.lower() for kw in CHART_KEYWORDS)
+
+
+def normalize_question(question: str) -> str:
+    """Remove accents for better SQL matching."""
+    return unidecode(question)
 
 
 def validate_sql(sql: str):
@@ -165,7 +173,10 @@ def process_question(question: str) -> dict:
                 "error": "blocked"
             }
 
-    llm_response = ask_llm(question)
+    # Normalize accents before sending to LLM
+    question_normalized = normalize_question(question)
+
+    llm_response = ask_llm(question_normalized)
     intent      = llm_response.get("intent", "error")
     sql         = llm_response.get("sql")
     chart_type  = llm_response.get("chart_type", "none")
@@ -200,6 +211,7 @@ def process_question(question: str) -> dict:
             "error": error
         }
 
+    # Use original question for natural language answer
     answer = "Aucun résultat trouvé dans le dataset électoral." if (df is None or df.empty) else formulate_answer(question, df)
 
     return {
