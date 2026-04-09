@@ -1,0 +1,6 @@
+.env
+*.swp
+agent/__pycache__/
+__pycache__/
+*.pyc
+data/election_2025.pdf
