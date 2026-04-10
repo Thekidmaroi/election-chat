@@ -10,7 +10,7 @@ import sys
 import os
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from agent.sql_agent import process_question
+from rag.hybrid_agent import process_question
 
 st.set_page_config(
     page_title="🗳️ EDAN 2025 — Election Chat",
