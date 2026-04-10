@@ -290,6 +290,34 @@ def handle_question(question: str):
     with st.chat_message("assistant"):
         with st.spinner("🔍 Analyse en cours..."):
             result = process_question(question)
+
+        # Handle clarification needed
+        if result.get("needs_clarification"):
+            st.markdown(result["answer"])
+            st.session_state.messages.append({
+                "role":    "assistant",
+                "content": result["answer"],
+                "chart":   None,
+            })
+            return
+
+        st.markdown(result["answer"])
+        df    = result.get("df")
+        chart = None
+        if df is not None and not df.empty:
+            chart = generate_chart(df, result.get("chart_type", "none"), question)
+            if chart:
+                st.plotly_chart(chart, use_container_width=True,
+                                key=f"chart_new_{len(st.session_state.messages)}")
+    st.session_state.messages.append({
+        "role":    "assistant",
+        "content": result["answer"],
+        "chart":   chart,
+    })
+    st.session_state.messages.append({"role": "user", "content": question})
+    with st.chat_message("assistant"):
+        with st.spinner("🔍 Analyse en cours..."):
+            result = process_question(question)
         st.markdown(result["answer"])
         df    = result.get("df")
         chart = None

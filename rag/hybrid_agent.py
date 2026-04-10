@@ -85,7 +85,36 @@ Regles:
     }
 
 
-def process_question(question: str) -> dict:
+def process_question(question: str, session_context: dict = None) -> dict:
+    """Main hybrid agent: disambiguate -> route to SQL or RAG."""
+    from rag.disambiguator import is_ambiguous
+
+    # Check session context for disambiguation
+    if session_context and session_context.get("disambiguation"):
+        # User already chose — use their refined question
+        question = session_context["refined_question"]
+
+    # Check for ambiguity first
+    ambiguity = is_ambiguous(question)
+    if ambiguity["ambiguous"]:
+        return {
+            "intent":          "clarification",
+            "sql":             None,
+            "df":              None,
+            "chart_type":      "none",
+            "answer":          ambiguity["clarification"],
+            "needs_clarification": True,
+            "matches":         ambiguity["matches"],
+            "ambiguity_type":  ambiguity["type"],
+            "error":           None,
+        }
+
+    # Route to SQL or RAG
+    path = route(question)
+    if path == "rag":
+        return rag_answer(question)
+    else:
+        return sql_process(question)
     """Main hybrid agent: route to SQL or RAG."""
     path = route(question)
 
