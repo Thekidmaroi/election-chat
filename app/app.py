@@ -118,11 +118,19 @@ st.markdown(f"""
         color: {CI_ORANGE}; font-family: 'Playfair Display', serif;
         font-size: 1.4em; margin-bottom: 10px;
     }}
+
+    .source-box {{
+        background: rgba(255,255,255,0.04);
+        border-left: 3px solid {CI_ORANGE};
+        border-radius: 8px; padding: 8px 14px;
+        margin-top: 10px; font-size: 0.78em;
+        color: rgba(255,255,255,0.5);
+    }}
     hr {{ border-color: rgba(247,127,0,0.2) !important; }}
 </style>
 """, unsafe_allow_html=True)
 
-# ── Header ──────────────────────────────────────────────
+# ── Header ───────────────────────────────────────────────
 st.markdown("""
 <div class="main-header">
     <span style="font-size:3em; margin-right:15px; vertical-align:middle;">🇨🇮</span>
@@ -131,18 +139,18 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# ── Stats bar — Vraies valeurs issues de la DB ────────────────────────────────
+# ── Stats bar ─────────────────────────────────────────────
 st.markdown("""
 <div class="stats-bar">
-    <div class="stat-card"><span class="stat-number">184</span><span class="stat-label">Circonscriptions</span></div>
-    <div class="stat-card"><span class="stat-number">892</span><span class="stat-label">Candidats</span></div>
+    <div class="stat-card"><span class="stat-number">186</span><span class="stat-label">Circonscriptions</span></div>
+    <div class="stat-card"><span class="stat-number">964</span><span class="stat-label">Candidats</span></div>
     <div class="stat-card"><span class="stat-number">41,71%</span><span class="stat-label">Participation moyenne</span></div>
-    <div class="stat-card"><span class="stat-number">31</span><span class="stat-label">Partis en lice</span></div>
+    <div class="stat-card"><span class="stat-number">32</span><span class="stat-label">Partis en lice</span></div>
     <div class="stat-card"><span class="stat-number">1,68M</span><span class="stat-label">Électeurs inscrits</span></div>
 </div>
 """, unsafe_allow_html=True)
 
-# ── Sidebar ──────────────────────────────────────────────
+# ── Sidebar ───────────────────────────────────────────────
 with st.sidebar:
     st.markdown("""
     <div style="text-align:center; padding:10px 0 20px 0;">
@@ -157,11 +165,11 @@ with st.sidebar:
         ("🏆", "Combien de sièges a gagné le RHDP ?"),
         ("📊", "Top 10 candidats par nombre de voix"),
         ("🗺️", "Qui a gagné dans la circonscription 001 ?"),
-        ("📈", "Taux de participation par circonscription"),
+        ("📈", "Taux de participation par région"),
         ("📊", "Montre un histogramme des élus par parti"),
         ("🔍", "Qui sont les élus PDCI-RDA ?"),
         ("⚡", "Circonscription avec le plus de voix"),
-        ("🌍", "Participation par région"),
+        ("🌍", "Parle moi des résultats à Abidjan"),
     ]
     for icon, ex in examples:
         if st.button(f"{icon} {ex}", use_container_width=True, key=ex):
@@ -179,13 +187,13 @@ with st.sidebar:
         </div>
         """, unsafe_allow_html=True)
 
-# ── Session state ────────────────────────────────────────
+# ── Session state ─────────────────────────────────────────
 if "messages" not in st.session_state:
     st.session_state.messages = []
 if "pending_question" not in st.session_state:
     st.session_state.pending_question = None
 
-# ── Chart colors ─────────────────────────────────────────
+# ── Chart colors ──────────────────────────────────────────
 PARTI_COLORS = {
     "RHDP": CI_ORANGE, "PDCI-RDA": "#3498db",
     "INDEPENDANT": "#95a5a6", "FPI": "#e74c3c",
@@ -196,7 +204,7 @@ COLOR_SEQ = [CI_ORANGE, CI_GREEN, "#3498db", "#e74c3c", "#9b59b6",
              "#1abc9c", "#f39c12", "#2ecc71", "#e67e22", "#16a085"]
 
 
-def generate_chart(df, chart_type, question, key=""):
+def generate_chart(df, chart_type, question):
     try:
         if df is None or df.empty or chart_type == "none":
             return None
@@ -262,7 +270,27 @@ def generate_chart(df, chart_type, question, key=""):
         return None
 
 
-# ── Welcome screen ───────────────────────────────────────
+def render_sources(sources: list):
+    """Render RAG source citations."""
+    if not sources:
+        return
+    lines = []
+    for s in sources:
+        circ = s.get("circonscription", "")
+        page = s.get("page", "?")
+        score = s.get("score", 0)
+        if circ:
+            lines.append(f"📄 Page {page} — {circ} (score: {score:.2f})")
+        else:
+            lines.append(f"📄 Page {page} (score: {score:.2f})")
+    sources_text = " &nbsp;|&nbsp; ".join(lines)
+    st.markdown(
+        f'<div class="source-box">🔍 Sources : {sources_text}</div>',
+        unsafe_allow_html=True
+    )
+
+
+# ── Welcome screen ────────────────────────────────────────
 if not st.session_state.messages:
     st.markdown("""
     <div class="welcome-card">
@@ -275,65 +303,51 @@ if not st.session_state.messages:
     </div>
     """, unsafe_allow_html=True)
 
-# ── Chat history ─────────────────────────────────────────
+# ── Chat history ──────────────────────────────────────────
 for i, msg in enumerate(st.session_state.messages):
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
         if msg.get("chart") is not None:
             st.plotly_chart(msg["chart"], use_container_width=True,
                             key=f"chart_hist_{i}")
+        if msg.get("sources"):
+            render_sources(msg["sources"])
 
 
-# ── Handle question ──────────────────────────────────────
+# ── Handle question ───────────────────────────────────────
 def handle_question(question: str):
     st.session_state.messages.append({"role": "user", "content": question})
     with st.chat_message("assistant"):
         with st.spinner("🔍 Analyse en cours..."):
             result = process_question(question)
 
-        # Handle clarification needed
-        if result.get("needs_clarification"):
-            st.markdown(result["answer"])
-            st.session_state.messages.append({
-                "role":    "assistant",
-                "content": result["answer"],
-                "chart":   None,
-            })
-            return
+        answer     = result.get("answer", "")
+        sources    = result.get("sources", [])
+        chart      = None
 
-        st.markdown(result["answer"])
-        df    = result.get("df")
-        chart = None
+        st.markdown(answer)
+
+        # Show chart if available
+        df = result.get("df")
         if df is not None and not df.empty:
             chart = generate_chart(df, result.get("chart_type", "none"), question)
             if chart:
                 st.plotly_chart(chart, use_container_width=True,
                                 key=f"chart_new_{len(st.session_state.messages)}")
+
+        # Show RAG sources if available
+        if sources:
+            render_sources(sources)
+
     st.session_state.messages.append({
         "role":    "assistant",
-        "content": result["answer"],
+        "content": answer,
         "chart":   chart,
-    })
-    st.session_state.messages.append({"role": "user", "content": question})
-    with st.chat_message("assistant"):
-        with st.spinner("🔍 Analyse en cours..."):
-            result = process_question(question)
-        st.markdown(result["answer"])
-        df    = result.get("df")
-        chart = None
-        if df is not None and not df.empty:
-            chart = generate_chart(df, result.get("chart_type", "none"), question)
-            if chart:
-                st.plotly_chart(chart, use_container_width=True,
-                                key=f"chart_new_{len(st.session_state.messages)}")
-    st.session_state.messages.append({
-        "role":    "assistant",
-        "content": result["answer"],
-        "chart":   chart,
+        "sources": sources,
     })
 
 
-# ── Triggers ─────────────────────────────────────────────
+# ── Triggers ──────────────────────────────────────────────
 if st.session_state.pending_question:
     q = st.session_state.pending_question
     st.session_state.pending_question = None
