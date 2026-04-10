@@ -47,6 +47,8 @@ EXEMPLES DE REQUETES CORRECTES:
 - "combien independants elus" → SELECT COUNT(*) as sieges_gagnes FROM vw_winners WHERE parti ILIKE '%INDEPENDANT%'
 - "top candidats" → SELECT candidat, SUM(voix) as total_voix FROM results WHERE LENGTH(candidat) < 35 AND candidat NOT ILIKE '%ENSEMBLE%' AND candidat NOT ILIKE '%POUR%' AND candidat NOT ILIKE '%IVOIRE%' GROUP BY candidat ORDER BY total_voix DESC LIMIT 10
 - "qui a gagne dans 001" → SELECT candidat, parti, voix, pourcentage FROM vw_winners WHERE circ_num = '001'
+- "qui a gagne dans 002" → SELECT candidat, parti, voix, pourcentage FROM vw_winners WHERE circ_num = '002'
+- "quel candidat elu dans 015" → SELECT candidat, parti, voix, pourcentage FROM vw_winners WHERE circ_num = '015'
 - "participation la plus basse" → SELECT circonscription, taux_participation FROM vw_turnout ORDER BY taux_participation ASC LIMIT 5
 - "circonscription avec le plus de voix" → SELECT circonscription, circ_num, SUM(voix) as total_voix FROM results GROUP BY circonscription, circ_num ORDER BY total_voix DESC LIMIT 5
 - "region Gbeke" → WHERE region ILIKE '%GBEKE%'
@@ -56,7 +58,7 @@ REGLES STRICTES:
 1. SELECT uniquement — jamais INSERT, UPDATE, DELETE, DROP, ALTER
 2. LIMIT 50 maximum sauf aggregation globale
 3. Utilise UNIQUEMENT les tables/vues du schema
-4. Pour les noms avec accents ou variantes: utilise ILIKE avec wildcards. Les noms dans la DB sont sans accents en majuscules. Ex: Gbêkê → ILIKE '%GBEKE%', Côte d'Ivoire → ILIKE '%COTE%IVOIRE%'
+4. Pour les noms avec accents ou variantes: utilise ILIKE avec wildcards. Les noms dans la DB sont sans accents en majuscules. Ex: Gbêkê → ILIKE '%GBEKE%'
 5. vw_winners ne contient PAS la colonne elu
 6. Pour le top candidats: WHERE LENGTH(candidat) < 35 AND candidat NOT ILIKE '%ENSEMBLE%' AND candidat NOT ILIKE '%POUR%' AND candidat NOT ILIKE '%IVOIRE%' AND candidat NOT ILIKE '%COTE%' AND candidat NOT ILIKE '%UNE%' AND candidat NOT ILIKE '%TOUS%'
 7. Si hors dataset: intent = out_of_scope

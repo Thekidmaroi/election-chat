@@ -117,17 +117,12 @@ def build_region_map():
                 else:
                     current_letters.append(text)
 
-    # ── Fill gaps ──────────────────────────────────────────
-    # Get all circ nums that should exist (001 to max)
     if region_map:
         all_nums = sorted([int(k) for k in region_map.keys()])
         max_num  = all_nums[-1]
-
-        # Forward fill: circ without region gets region of next known circ
         for i in range(1, max_num + 1):
             circ_str = str(i).zfill(3)
             if circ_str not in region_map:
-                # Find next known region
                 for j in range(i + 1, max_num + 2):
                     next_str = str(j).zfill(3)
                     if next_str in region_map:
@@ -156,11 +151,11 @@ def is_candidate_line(line):
 
 def parse_candidate_line(line):
     parti = ""
-    rest = line
+    rest  = line
     for p in sorted(KNOWN_PARTIS, key=len, reverse=True):
         if line.upper().startswith(p):
             parti = p
-            rest = line[len(p):].strip()
+            rest  = line[len(p):].strip()
             break
     if not parti:
         return None
@@ -182,6 +177,43 @@ def parse_candidate_line(line):
         "pourcentage": pct,
         "elu":         elu,
     }
+
+
+def parse_inline_candidate(line):
+    """
+    Parse line with both circ data AND candidate on same line.
+    ex: '015 106 36 892 36846 99,88% 0 36 846 0 0,00% RHDP KONE MARIATOU 36 846 100,00% ELU(E)'
+    Must have a known parti keyword after the numeric data.
+    """
+    # Only try if a known parti appears in the line
+    up = line.upper()
+    has_parti = any(up.find(p) > 20 for p in KNOWN_PARTIS)
+    if not has_parti:
+        return None, None
+
+    m = re.match(
+        r"^(\d{3})\s+(\d{1,4})\s+([\d ]{4,12})\s+([\d ]{3,8})\s+([\d,\.]+)\s*%\s+(\d{1,6})\s+([\d ]{3,10})\s+(\d+)\s+([\d,\.]+)\s*%\s+(.+)$",
+        line
+    )
+    if not m:
+        return None, None
+
+    circ = {
+        "circ_num":           m.group(1).strip(),
+        "circ_name":          None,
+        "nb_bv":              to_int(m.group(2)),
+        "inscrits":           to_int(m.group(3)),
+        "votants":            to_int(m.group(4)),
+        "taux_participation": to_float(m.group(5)),
+        "blancs_nuls":        to_int(m.group(6)),
+        "exprimes":           to_int(m.group(7)),
+    }
+
+    cand_part = m.group(10).strip()
+    cand      = parse_candidate_line(cand_part)
+    if not cand:
+        return None, None
+    return circ, cand
 
 
 def parse_circ_line(line):
@@ -237,8 +269,28 @@ def is_skip(line):
     return any(kw in up for kw in SKIP)
 
 
+def make_record(page_num, region_map, circ_num, circ_name, inscrits, votants,
+                taux, blancs, exprimes, cand):
+    return {
+        "source_page":        page_num,
+        "region":             region_map.get(circ_num, ""),
+        "circ_num":           circ_num,
+        "circonscription":    circ_name,
+        "inscrits":           inscrits,
+        "votants":            votants,
+        "taux_participation": taux,
+        "blancs_nuls":        blancs,
+        "exprimes":           exprimes,
+        "parti":              cand["parti"],
+        "candidat":           cand["candidat"],
+        "voix":               cand["voix"],
+        "pourcentage":        cand["pourcentage"],
+        "elu":                cand["elu"],
+    }
+
+
 def parse_pages(pages, region_map):
-    records = []
+    records           = []
     current_circ_num  = ""
     current_circ_name = ""
     current_inscrits  = None
@@ -255,6 +307,25 @@ def parse_pages(pages, region_map):
             if is_skip(line):
                 continue
 
+            # 1. Try inline candidate FIRST (circ + candidate on same line)
+            circ2, cand2 = parse_inline_candidate(line)
+            if circ2 and cand2:
+                current_circ_num  = circ2["circ_num"]
+                if circ2["circ_name"]:
+                    current_circ_name = circ2["circ_name"]
+                current_inscrits  = circ2["inscrits"]
+                current_votants   = circ2["votants"]
+                current_taux      = circ2["taux_participation"]
+                current_blancs    = circ2["blancs_nuls"]
+                current_exprimes  = circ2["exprimes"]
+                records.append(make_record(
+                    page_num, region_map, current_circ_num, current_circ_name,
+                    current_inscrits, current_votants, current_taux,
+                    current_blancs, current_exprimes, cand2
+                ))
+                continue
+
+            # 2. Try regular circ line
             circ = parse_circ_line(line)
             if circ:
                 current_circ_num = circ["circ_num"]
@@ -267,26 +338,15 @@ def parse_pages(pages, region_map):
                 current_exprimes  = circ["exprimes"]
                 continue
 
+            # 3. Try candidate line
             if is_candidate_line(line):
                 cand = parse_candidate_line(line)
                 if cand:
-                    region = region_map.get(current_circ_num, "")
-                    records.append({
-                        "source_page":        page_num,
-                        "region":             region,
-                        "circ_num":           current_circ_num,
-                        "circonscription":    current_circ_name,
-                        "inscrits":           current_inscrits,
-                        "votants":            current_votants,
-                        "taux_participation": current_taux,
-                        "blancs_nuls":        current_blancs,
-                        "exprimes":           current_exprimes,
-                        "parti":              cand["parti"],
-                        "candidat":           cand["candidat"],
-                        "voix":               cand["voix"],
-                        "pourcentage":        cand["pourcentage"],
-                        "elu":                cand["elu"],
-                    })
+                    records.append(make_record(
+                        page_num, region_map, current_circ_num, current_circ_name,
+                        current_inscrits, current_votants, current_taux,
+                        current_blancs, current_exprimes, cand
+                    ))
 
     print(f"Parsed {len(records)} candidate records")
     return records
@@ -352,15 +412,17 @@ def load_to_duckdb(df):
     partis  = con.execute("SELECT COUNT(DISTINCT parti) FROM results").fetchone()[0]
     print(f"DuckDB loaded: {count} rows | {winners} elus | {regions} regions | {circs} circs | {partis} partis")
     print("\nRegions detected:")
-    print(con.execute("SELECT region, COUNT(DISTINCT circ_num) as circs FROM results WHERE region != '' GROUP BY region ORDER BY region").df().to_string())
+    print(con.execute(
+        "SELECT region, COUNT(DISTINCT circ_num) as circs FROM results WHERE region != '' GROUP BY region ORDER BY region"
+    ).df().to_string())
     con.close()
 
 
 def run():
     download_pdf()
     region_map = build_region_map()
-    pages = extract_text_pages()
-    records = parse_pages(pages, region_map)
+    pages      = extract_text_pages()
+    records    = parse_pages(pages, region_map)
     if not records:
         print("ERROR: No records parsed!")
         return
