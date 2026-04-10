@@ -89,9 +89,6 @@ def match_region(text, threshold=60):
     return None
 
 
-# ─────────────────────────────────────────
-# Pre-pass: build circ_num -> region map
-# ─────────────────────────────────────────
 def build_region_map():
     print("Building region map from spatial extraction...")
     region_map = {}
@@ -120,13 +117,27 @@ def build_region_map():
                 else:
                     current_letters.append(text)
 
+    # ── Fill gaps ──────────────────────────────────────────
+    # Get all circ nums that should exist (001 to max)
+    if region_map:
+        all_nums = sorted([int(k) for k in region_map.keys()])
+        max_num  = all_nums[-1]
+
+        # Forward fill: circ without region gets region of next known circ
+        for i in range(1, max_num + 1):
+            circ_str = str(i).zfill(3)
+            if circ_str not in region_map:
+                # Find next known region
+                for j in range(i + 1, max_num + 2):
+                    next_str = str(j).zfill(3)
+                    if next_str in region_map:
+                        region_map[circ_str] = region_map[next_str]
+                        break
+
     print(f"Region map built: {len(region_map)} circumscriptions mapped")
     return region_map
 
 
-# ─────────────────────────────────────────
-# Extract text pages
-# ─────────────────────────────────────────
 def extract_text_pages():
     pages = []
     with pdfplumber.open(PDF_PATH) as pdf:
@@ -174,20 +185,40 @@ def parse_candidate_line(line):
 
 
 def parse_circ_line(line):
+    # Format 1: with name
     m = re.match(
-        r"^(\d{3})\s+(.+?)\s+([\d][\d\s]{1,5})\s+([\d][\d\s]{2,8})\s+([\d][\d\s]{2,8})\s+([\d,\.]+)\s*%\s+([\d][\d\s]{0,8})\s+([\d][\d\s]{2,8})\s+([\d]+)\s+([\d,\.]+)\s*%?",
+        r"^(\d{3})\s+(.+?)\s+(\d{1,4})\s+([\d ]{4,12})\s+([\d ]{3,8})\s+([\d,\.]+)\s*%\s+(\d{1,6})\s+([\d ]{3,10})\s+(\d+)\s+([\d,\.]+)\s*%?",
         line
     )
     if m:
         return {
             "circ_num":           m.group(1).strip(),
             "circ_name":          norm_upper(m.group(2)),
+            "nb_bv":              to_int(m.group(3)),
             "inscrits":           to_int(m.group(4)),
             "votants":            to_int(m.group(5)),
             "taux_participation": to_float(m.group(6)),
             "blancs_nuls":        to_int(m.group(7)),
             "exprimes":           to_int(m.group(8)),
         }
+
+    # Format 2: without name
+    m2 = re.match(
+        r"^(\d{3})\s+(\d{1,4})\s+([\d ]{4,12})\s+([\d ]{3,8})\s+([\d,\.]+)\s*%\s+(\d{1,6})\s+([\d ]{3,10})\s+(\d+)\s+([\d,\.]+)\s*%?",
+        line
+    )
+    if m2:
+        return {
+            "circ_num":           m2.group(1).strip(),
+            "circ_name":          None,
+            "nb_bv":              to_int(m2.group(2)),
+            "inscrits":           to_int(m2.group(3)),
+            "votants":            to_int(m2.group(4)),
+            "taux_participation": to_float(m2.group(5)),
+            "blancs_nuls":        to_int(m2.group(6)),
+            "exprimes":           to_int(m2.group(7)),
+        }
+
     return None
 
 
@@ -226,8 +257,9 @@ def parse_pages(pages, region_map):
 
             circ = parse_circ_line(line)
             if circ:
-                current_circ_num  = circ["circ_num"]
-                current_circ_name = circ["circ_name"]
+                current_circ_num = circ["circ_num"]
+                if circ["circ_name"]:
+                    current_circ_name = circ["circ_name"]
                 current_inscrits  = circ["inscrits"]
                 current_votants   = circ["votants"]
                 current_taux      = circ["taux_participation"]
@@ -319,7 +351,6 @@ def load_to_duckdb(df):
     circs   = con.execute("SELECT COUNT(DISTINCT circ_num) FROM results WHERE circ_num != ''").fetchone()[0]
     partis  = con.execute("SELECT COUNT(DISTINCT parti) FROM results").fetchone()[0]
     print(f"DuckDB loaded: {count} rows | {winners} elus | {regions} regions | {circs} circs | {partis} partis")
-
     print("\nRegions detected:")
     print(con.execute("SELECT region, COUNT(DISTINCT circ_num) as circs FROM results WHERE region != '' GROUP BY region ORDER BY region").df().to_string())
     con.close()
